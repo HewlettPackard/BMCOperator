@@ -42,20 +42,20 @@ var confMutex = &sync.RWMutex{}
 
 // ConfigModel contains config values (Mandatory values)
 type ConfigModel struct {
-	Reconciliation                         string      `yaml:"reconciliation"`
-	ReconcileInterval                      string      `yaml:"reconcileInterval"`
-	SecretName                             string      `yaml:"secretName"`
-	MetricPort                             string      `yaml:"metricsBindPort"`
-	HealthPort                             string      `yaml:"healthProbeBindPort"`
-	EventClientPort                        string      `yaml:"eventClientPort"`
-	LogLevel                               log.Level   `yaml:"logLevel"`
-	LogFormat                              l.LogFormat `yaml:"logFormat"`
-	KubeConfigPath                         string      `yaml:"kubeConfigPath"`
-	EventSubReconciliation                 string      `yaml:"eventSubReconciliation"`
-	Namespace                              string      `yaml:"namespace"`
-	OperatorEventSubscriptionMeesageIds    []string    `yaml:"operatorEventSubsciptionMessageIds"`
-	OperatorEventSubscriptionEventTypes    []string    `yaml:"operatorEventSubscriptionEventTypes"`
-	OperatorEventSubscriptionResourceTypes []string    `yaml:" operatorEventSubsciptionResourceTypes"`
+	Reconciliation                 string      `yaml:"reconciliation"`
+	ReconcileInterval              string      `yaml:"reconcileInterval"`
+	SecretName                     string      `yaml:"secretName"`
+	MetricPort                     string      `yaml:"metricsBindPort"`
+	HealthPort                     string      `yaml:"healthProbeBindPort"`
+	EventClientPort                string      `yaml:"eventClientPort"`
+	LogLevel                       log.Level   `yaml:"logLevel"`
+	LogFormat                      l.LogFormat `yaml:"logFormat"`
+	KubeConfigPath                 string      `yaml:"kubeConfigPath"`
+	EventSubReconciliation         string      `yaml:"eventSubReconciliation"`
+	Namespace                      string      `yaml:"namespace"`
+	EventSubscriptionMessageIds    []string    `yaml:"EventSubscriptionMessageIds"`
+	EventSubscriptionEventTypes    []string    `yaml:"EventSubscriptionEventTypes"`
+	EventSubscriptionResourceTypes []string    `yaml:"EventSubscriptionResourceTypes"`
 }
 
 var (
@@ -84,6 +84,7 @@ func TrackConfigListener(errChan chan error) {
 	eventChan := make(chan interface{})
 	format := Data.LogFormat
 	reconciliation := Data.Reconciliation
+	eventsubreconciliation := Data.EventSubReconciliation
 	reconciliationInterval := Data.ReconcileInterval
 	transactionID := uuid.New()
 	ctx := l.CreateContextForLogging(context.Background(), transactionID.String(), constants.BmcOperator, constants.TrackFileConfigActionID, constants.TrackFileConfigActionName, podName)
@@ -102,16 +103,36 @@ func TrackConfigListener(errChan chan error) {
 				l.LogWithFields(ctx).Info("Log format is updated, new log format is ", Data.LogFormat)
 			}
 			if reconciliation != Data.Reconciliation {
-				reconciliation = Data.Reconciliation
-				l.LogWithFields(ctx).Info("Reconciliation action is updated, new action is ", Data.Reconciliation)
+				if Data.Reconciliation == "Accommodate" || Data.Reconciliation == "Revert" {
+					reconciliation = Data.Reconciliation
+					l.LogWithFields(ctx).Info("Reconciliation action is updated, new action is ", Data.Reconciliation)
+				} else {
+					l.LogWithFields(ctx).Info("Please provide valid value for Reconciliation. Supported values are 'Accommodate' and 'Revert'")
+				}
+			}
+			if eventsubreconciliation != Data.EventSubReconciliation {
+				if Data.EventSubReconciliation == "Accommodate" || Data.EventSubReconciliation == "Revert" {
+					eventsubreconciliation = Data.EventSubReconciliation
+					l.LogWithFields(ctx).Info("EventSubReconciliation action is updated, new action is ", Data.EventSubReconciliation)
+				} else {
+					l.LogWithFields(ctx).Info("Please provide valid value for EventSubReconciliation. Supported values are 'Accommodate' and 'Revert'")
+				}
 			}
 			if reconciliationInterval != Data.ReconcileInterval {
 				reconciliation = Data.ReconcileInterval
-				TickerTime, _ = strconv.Atoi(Data.ReconcileInterval)
-				if Ticker != nil {
-					Ticker.Reset(time.Duration(time.Duration(TickerTime) * time.Hour))
+				var err error
+				if Data.ReconcileInterval != "" {
+					if TickerTime, err = strconv.Atoi(Data.ReconcileInterval); err == nil {
+						if Ticker != nil {
+							Ticker.Reset(time.Duration(time.Duration(TickerTime) * time.Hour))
+						}
+						l.LogWithFields(ctx).Info("Reconciliation interval is updated, ticker is set to  ", TickerTime)
+					} else {
+						l.LogWithFields(ctx).Info("Please provide valid value for ReconcileInterval")
+					}
+				} else {
+					l.LogWithFields(ctx).Info("Please provide valid value for ReconcileInterval")
 				}
-				l.LogWithFields(ctx).Info("Reconciliation interval is updated, ticker is set to  ", TickerTime)
 			}
 		case err := <-errChan:
 			l.LogWithFields(ctx).Error(err)

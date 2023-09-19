@@ -107,6 +107,16 @@ func (r *OdimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		return ctrl.Result{}, nil
 	}
+	connected := odimUtil.checkOdimConnection()
+	if connected {
+		l.LogWithFields(ctx).Info("Odim successfully registered!, updating connection methods")
+		odimUtil.updateConnectionMethodVariants()
+		l.LogWithFields(ctx).Info("Successfully added all connection methods!")
+	} else {
+		r.Delete(ctx, odimObj)
+		return ctrl.Result{}, nil
+	}
+
 	// Add finalizer for this CR
 	if !controllerutil.ContainsFinalizer(odimObj, odimFinalizer) {
 		controllerutil.AddFinalizer(odimObj, odimFinalizer)
@@ -116,15 +126,6 @@ func (r *OdimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, err
 		}
 	}
-	connected := odimUtil.checkOdimConnection()
-	if connected {
-		l.LogWithFields(ctx).Info("Odim successfully registered!, updating connection methods")
-		odimUtil.updateConnectionMethodVariants()
-		l.LogWithFields(ctx).Info("Successfully added all connection methods!")
-	} else {
-		return ctrl.Result{}, nil
-	}
-
 	commonRec.GetUpdatedOdimObject(ctx, req.NamespacedName, odimObj)
 	// starting event listener
 	go eventsClient.Start(r.Client, r.Scheme)
@@ -259,9 +260,13 @@ func removeEventsSubscription(ctx context.Context, restClient restclient.RestCli
 					l.LogWithFields(ctx).Errorf("error while deleting subscription for bmc operator: %s", err.Error())
 					return false
 				}
-				if resp.StatusCode == http.StatusOK {
-					l.LogWithFields(ctx).Infof("deleted events subscription with ID %s", subs)
-					return true
+				if resp.StatusCode == http.StatusAccepted {
+					commonUtil := common.GetCommonUtils(restClient)
+					done, _ := commonUtil.MoniteringTaskmon(resp.Header, ctx, common.DELETEEVENTSUBSCRIPTION, "BmcOperatorSubscription")
+					if done {
+						l.LogWithFields(ctx).Infof("deleted events subscription with ID %s", subs)
+						return true
+					}
 				}
 			}
 		}

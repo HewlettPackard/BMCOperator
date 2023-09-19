@@ -504,15 +504,27 @@ func (bu *bmcUtils) updateDriveDetails() map[string]infraiov1.ArrayControllers {
 
 // GetManagerDetails used to get manager response
 func (bu *bmcUtils) GetManagerDetails() map[string]interface{} {
-	var uri string
-	if strings.Contains(bu.bmcObj.Spec.BmcDetails.ConnMethVariant, "DELL") {
-		uri = "/redfish/v1/Managers/" + strings.Replace(bu.bmcObj.Status.BmcSystemID, "System", "iDRAC", -1)
-	} else {
-		uri = "/redfish/v1/Managers/" + bu.bmcObj.Status.BmcSystemID
+	systemUUID := strings.Split(bu.bmcObj.Status.BmcSystemID, ".")[0]
+	resp, sCode, err := bu.bmcRestClient.Get("/redfish/v1/Managers/", fmt.Sprintf("Fetching managers collection details"))
+	if err != nil {
+		l.LogWithFields(bu.ctx).Errorf("Failed to get managers collection details with error: %v", err)
 	}
-	resp, sCode, err := bu.bmcRestClient.Get(uri, fmt.Sprintf("Fetching manager details for %s BMC", bu.bmcObj.Spec.BmcDetails.Address))
 	if sCode == http.StatusOK {
-		return resp
+		members := resp["Members"].([]interface{})
+		if len(members) > 0 {
+			for _, member := range members {
+				managerURI := member.(map[string]interface{})["@odata.id"].(string)
+				uri := strings.Split(managerURI, "/")
+				systemID := uri[len(uri)-1]
+				managerSysUUID := strings.Split(systemID, ".")[0]
+				if systemUUID == managerSysUUID {
+					resp, sCode, err = bu.bmcRestClient.Get(managerURI, fmt.Sprintf("Fetching manager details for %s BMC", bu.bmcObj.Spec.BmcDetails.Address))
+					if sCode == http.StatusOK {
+						return resp
+					}
+				}
+			}
+		}
 	}
 	l.LogWithFields(bu.ctx).Error(fmt.Sprintf("Failed getting manager details for %s BMC: Got %d from odim: %s", bu.bmcObj.Spec.BmcDetails.Address, sCode, err.Error()))
 	return nil
@@ -658,13 +670,19 @@ func (bu *bmcUtils) ResetSystem(isBiosUpdation bool, updateBmcDependents bool) b
 			biosUtil := bios.GetBiosUtils(bu.ctx, biosObj, bu.commonRec, bu.bmcRestClient, bu.namespace)
 			biosAttribute := getUpdatedBiosAttributes(bu.ctx, biosObj.Status.BiosAttributes, bu.bmcObj, biosUtil)
 			biosUtil.UpdateBiosAttributesOnReset(bu.bmcObj.Spec.BmcDetails.Address, biosAttribute)
-			sysDetails := bu.commonUtil.GetBmcSystemDetails(bu.ctx, bu.bmcObj)
-			if sysDetails != nil {
-				bootUtil := boot.GetBootUtils(bu.ctx, nil, bu.commonRec, bu.bmcRestClient, bu.commonUtil, bu.namespace)
-				bootAttribute := bootUtil.GetBootAttributes(sysDetails)
-				if bootAttribute != nil {
-					bootUtil.UpdateBootAttributesOnReset(bu.bmcObj.ObjectMeta.Name, bootAttribute)
+			bootObj := bu.commonRec.GetBootObject(bu.ctx, constants.MetadataName, bu.bmcObj.ObjectMeta.Name, bu.namespace)
+			oldBootAttribute := bootObj.Status.Boot
+			bootUtil := boot.GetBootUtils(bu.ctx, nil, bu.commonRec, bu.bmcRestClient, bu.commonUtil, bu.namespace)
+			for i := 0; i < 10; i++ {
+				sysDetails := bu.commonUtil.GetBmcSystemDetails(bu.ctx, bu.bmcObj)
+				if sysDetails != nil {
+					bootAttribute := bootUtil.GetBootAttributes(sysDetails)
+					if bootAttribute != nil && !reflect.DeepEqual(bootAttribute, oldBootAttribute) {
+						bootUtil.UpdateBootAttributesOnReset(bu.bmcObj.ObjectMeta.Name, bootAttribute)
+						break
+					}
 				}
+				time.Sleep(time.Duration(constants.SleepTime) * time.Second)
 			}
 			if strings.Contains(bu.bmcObj.Status.SystemReset, "Volume") {
 				strArr := strings.Split(bu.bmcObj.Status.SystemReset, " ")
@@ -686,9 +704,9 @@ func (bu *bmcUtils) ResetSystem(isBiosUpdation bool, updateBmcDependents bool) b
 
 func getUpdatedBiosAttributes(ctx context.Context, oldBiosAttributes map[string]string, bmcObj *infraiov1.Bmc, biosUtil bios.BiosInterface) map[string]string {
 	var updatedBiosAttributes map[string]string
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 10; i++ {
 		biosAttribute := biosUtil.GetBiosAttributes(bmcObj)
-		if !reflect.DeepEqual(biosAttribute, oldBiosAttributes) {
+		if biosAttribute != nil && !reflect.DeepEqual(biosAttribute, oldBiosAttributes) {
 			updatedBiosAttributes = biosAttribute
 			break
 		}
